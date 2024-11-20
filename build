@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+
+_branch=lf-6.1.y-karo-2
+
+pkgbase=linux-gocontroll-tx8m
+_srcname=linux-6.1
+_kernelname=${pkgbase#linux}
+_desc="Linux for GOcontroll Moduline tx8m based systems"
+pkgver="6.1"
+pkgrel=1
+ARCH=arm64
+url="http://www.kernel.org/"
+license='GPL2'
+
+_dtbs=('arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-iv-300.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-iv-301.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-iv-303.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-iv-304.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-iv-305.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-iv-306.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-iv-306-d.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-mini-103.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-mini-105.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-mini-106.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-mini-107.dtb'
+	'arch/arm64/boot/dts/freescale/imx8mm-tx8m-1610-moduline-mini-111.dtb')
+
+#fetch
+MAKEFLAGS=-j`nproc`
+echo "Shallow cloning linux repo"
+if [[ -d ${_srcname} ]]; then
+    cd $_srcname
+    git fetch --depth=1 origin ${_branch}
+    git checkout -b ${_branch} || (git checkout ${_branch} && git reset --hard origin/${_branch})
+else
+    git clone --depth=1 https://github.com/GOcontroll/GOcontroll-tx-linux.git ${_srcname} -b ${_branch}
+	cd $_srcname
+fi
+
+echo "Setting version..."
+make -s kernelrelease > version
+
+# build!
+unset LDFLAGS
+make ${MAKEFLAGS} ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- imx8mm_gocontroll_defconfig
+make ${MAKEFLAGS} ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- Image modules dtbs
+
+# install
+# kernel and modules
+PKGDIR=../${pkgbase}_${pkgver}-${pkgrel}_${ARCH}
+
+rm -rf `pwd`/${PKGDIR}
+
+install -Dm644 arch/arm64/boot/Image -T ${PKGDIR}/boot/Image
+
+for _dtb in "${_dtbs[@]}"; do
+    install -Dm644 "${_dtb}" -t "${PKGDIR}/boot/"
+done
+
+kernver="$(<version)"
+modulesdir="${PKGDIR}/lib/modules/$kernver"
+
+make INSTALL_MOD_PATH="${PKGDIR}" modules_install
+
+ # remove build and source links if they exist
+if [[ -L "$modulesdir"/source ]]; then
+    rm "$modulesdir"/source
+fi
+if [[ -L "$modulesdir"/build ]]; then
+    rm "$modulesdir"/build
+fi
+
+mkdir -p $PKGDIR/DEBIAN
+
+echo "Package: $pkgbase
+Version: $pkgver
+Maintainer: Maud Spierings <maudspierings@gocontroll.com>
+Architecture: $ARCH
+Homepage: http://www.kernel.org/
+Description: Linux kernel for GOcontroll Moduline controllers using the tx8m COM module" > ${PKGDIR}/DEBIAN/control
+
+dpkg --build $PKGDIR
+
