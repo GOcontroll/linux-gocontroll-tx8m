@@ -38,6 +38,8 @@ else
 fi
 
 echo "Setting version..."
+echo "-$pkgrel" > localversion.10-pkgrel
+echo "${pkgbase#linux}" > localversion.20-pkgname
 make -s kernelrelease > version
 
 # build!
@@ -81,3 +83,89 @@ Description: Linux kernel for GOcontroll Moduline controllers using the tx8m COM
 
 dpkg --build $PKGDIR
 
+# headers
+
+PKGDIR=../${pkgbase}-headers_${pkgver}-${pkgrel}_${ARCH}
+
+rm -rf `pwd`/${PKGDIR}
+
+make ${MAKEFLAGS} ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- INSTALL_HDR_PATH=${PKGDIR}/usr headers_install
+
+builddir=${PKGDIR}/lib/modules/$(<version)/build
+echo "Installing build files..."
+
+install -Dt "$builddir" -m644 .config Makefile Module.symvers System.map \
+    localversion.* version
+install -Dt "$builddir/kernel" -m644 kernel/Makefile
+install -Dt "$builddir/arch/arm64" -m644 arch/arm64/Makefile
+cp -t "$builddir" -a scripts
+
+echo "Installing headers..."
+cp -t "$builddir" -a include
+cp -t "$builddir/arch/arm64" -a arch/arm64/include
+install -Dt "$builddir/arch/arm64/kernel" -m644 arch/arm64/kernel/asm-offsets.s
+mkdir -p "$builddir/arch/arm"
+cp -t "$builddir/arch/arm" -a arch/arm/include
+
+install -Dt "$builddir/drivers/md" -m644 drivers/md/*.h
+install -Dt "$builddir/net/mac80211" -m644 net/mac80211/*.h
+
+# https://bugs.archlinux.org/task/13146
+install -Dt "$builddir/drivers/media/i2c" -m644 drivers/media/i2c/msp3400-driver.h
+
+# https://bugs.archlinux.org/task/20402
+install -Dt "$builddir/drivers/media/usb/dvb-usb" -m644 drivers/media/usb/dvb-usb/*.h
+install -Dt "$builddir/drivers/media/dvb-frontends" -m644 drivers/media/dvb-frontends/*.h
+install -Dt "$builddir/drivers/media/tuners" -m644 drivers/media/tuners/*.h
+
+# https://bugs.archlinux.org/task/71392
+install -Dt "$builddir/drivers/iio/common/hid-sensors" -m644 drivers/iio/common/hid-sensors/*.h
+
+echo "Installing KConfig files..."
+find . -name 'Kconfig*' -exec install -Dm644 {} "$builddir/{}" \;
+
+echo "Removing unneeded architectures..."
+
+for arch in "$builddir"/arch/*/; do
+    [[ $arch = */arm64/ || $arch == */arm/ ]] && continue
+    echo "Removing $(basename "$arch")"
+    rm -r "$arch"
+done
+
+echo "Removing documentation..."
+rm -r "$builddir/Documentation"
+
+echo "Removing broken symlinks..."
+find -L "$builddir" -type l -printf 'Removing %P\n' -delete
+
+echo "Removing loose objects..."
+find "$builddir" -type f -name '*.o' -printf 'Removing %P\n' -delete
+
+echo "Stripping build tools..."
+while read -rd '' file; do
+    case "$(file -bi "$file")" in
+      application/x-sharedlib\;*)      # Libraries (.so)
+        strip -v $STRIP_SHARED "$file" ;;
+      application/x-archive\;*)        # Libraries (.a)
+        strip -v $STRIP_STATIC "$file" ;;
+      application/x-executable\;*)     # Binaries
+        strip -v $STRIP_BINARIES "$file" ;;
+      application/x-pie-executable\;*) # Relocatable binaries
+        strip -v $STRIP_SHARED "$file" ;;
+    esac
+done < <(find "$builddir" -type f -perm -u+x ! -name vmlinux -print0)
+
+echo "Adding symlink..."
+mkdir -p "$PKGDIR/usr/src"
+ln -sr "$builddir" "$PKGDIR/usr/src/$pkgbase"
+
+mkdir -p $PKGDIR/DEBIAN
+
+echo "Package: ${pkgbase}-headers
+Version: $pkgver
+Maintainer: Maud Spierings <maudspierings@gocontroll.com>
+Architecture: $ARCH
+Homepage: http://www.kernel.org/
+Description: Linux kernel headers for GOcontroll Moduline controllers using the tx8m COM module" > ${PKGDIR}/DEBIAN/control
+
+dpkg --build $PKGDIR
